@@ -13,3 +13,6 @@ The app logic:
 It is in json format and can be deployed to Azure by Azure devops
 Azure API Management can be used for securing the logic app and using its "Restrict caller IPs" policy should help resticiting access
 
+Design time 1 hour
+Machine setup 1 hour
+Implementation and documentation 4 hours
