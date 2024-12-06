@@ -1,0 +1,475 @@
+{
+    "definition": {
+        "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+        "contentVersion": "1.0.0.0",
+        "triggers": {
+            "When_a_blob_is_added_or_modified_(properties_only)_(V2)": {
+                "recurrence": {
+                    "interval": 3,
+                    "frequency": "Minute"
+                },
+                "evaluatedRecurrence": {
+                    "interval": 3,
+                    "frequency": "Minute"
+                },
+                "splitOn": "@triggerBody()",
+                "metadata": {
+                    "JTJmb3JkZXJz": "/orders"
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['azureblob-1']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/triggers/batch/onupdatedfile",
+                    "queries": {
+                        "folderId": "JTJmb3JkZXJz",
+                        "maxFileCount": 10,
+                        "checkBothCreatedAndModifiedDateTime": false
+                    }
+                }
+            }
+        },
+        "actions": {
+            "Get_blob_content_(V2)": {
+                "runAfter": {},
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['azureblob-1']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/v2/datasets/@{encodeURIComponent(encodeURIComponent('AccountNameFromSettings'))}/files/@{encodeURIComponent(encodeURIComponent('/orders'))}/content",
+                    "queries": {
+                        "inferContentType": true
+                    }
+                }
+            },
+            "Get_file_content": {
+                "runAfter": {
+                    "Get_blob_content_(V2)": [
+                        "Succeeded"
+                    ]
+                },
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['filesystem']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/datasets/default/files/@{encodeURIComponent(encodeURIComponent(body('Get_blob_content_(V2)')))}/content",
+                    "queries": {
+                        "inferContentType": true
+                    }
+                }
+            },
+            "Initialize_raw_csv": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "rawCsv",
+                            "type": "array",
+                            "value": "@skip(split(body('Get_file_content'), '\\r\\n'), 1)"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Get_file_content": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_control_id": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "controlId",
+                            "type": "integer",
+                            "value": 123
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_raw_csv": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Create_JSON": {
+                "type": "ParseJson",
+                "inputs": {
+                    "content": {
+                        "controlNumber": "@variables('controlId')",
+                        "salesOrder": "@{take(split(take(variables('rawCsv'),1),','),1)}",
+                        "containers": [
+                            "@variables('closedJsonItems')"
+                        ],
+                        "deliveryAddress": {
+                            "street": "@{take(skip(split(take(variables('rawCsv'),1)),6),1) }",
+                            "city": "@{take(skip(split(take(variables('rawCsv'),1)),7),1) }",
+                            "state": "@{take(skip(split(take(variables('rawCsv'),1)),8),1) }",
+                            "postalCode": "@{take(skip(split(take(variables('rawCsv'),1)),9),1) }",
+                            "country": "@{take(skip(split(take(variables('rawCsv'),1)),10),1) }"
+                        }
+                    },
+                    "schema": {
+                        "$schema": "http://json-schema.org/draft-07/schema#",
+                        "title": "ReadyForDispatch",
+                        "type": "object",
+                        "properties": {
+                            "controlNumber": {
+                                "type": "integer",
+                                "description": "A control number that increases with any data change"
+                            },
+                            "salesOrder": {
+                                "type": "string",
+                                "description": "The sales order associated with the load"
+                            },
+                            "containers": {
+                                "type": "array",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "loadId": {
+                                            "type": "string",
+                                            "description": "A unique identifier for each container"
+                                        },
+                                        "containerType": {
+                                            "type": "string",
+                                            "description": "The type of container",
+                                            "enum": [
+                                                "20RF",
+                                                "40RF",
+                                                "20HC",
+                                                "40HC"
+                                            ]
+                                        },
+                                        "items": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "itemCode": {
+                                                        "type": "string",
+                                                        "description": "The item code"
+                                                    },
+                                                    "quantity": {
+                                                        "type": "number",
+                                                        "description": "The quantity of the item"
+                                                    },
+                                                    "cartonWeight": {
+                                                        "type": "number",
+                                                        "description": "The weight of each carton in kilograms"
+                                                    }
+                                                },
+                                                "required": [
+                                                    "itemCode",
+                                                    "quantity",
+                                                    "cartonWeight"
+                                                ]
+                                            },
+                                            "description": "The items and quantities to load in each container"
+                                        }
+                                    },
+                                    "required": [
+                                        "loadId",
+                                        "containerType",
+                                        "items"
+                                    ]
+                                }
+                            },
+                            "deliveryAddress": {
+                                "type": "object",
+                                "properties": {
+                                    "street": {
+                                        "type": "string",
+                                        "description": "Street address"
+                                    },
+                                    "city": {
+                                        "type": "string",
+                                        "description": "City"
+                                    },
+                                    "state": {
+                                        "type": "string",
+                                        "description": "State"
+                                    },
+                                    "postalCode": {
+                                        "type": "string",
+                                        "description": "Postal code"
+                                    },
+                                    "country": {
+                                        "type": "string",
+                                        "description": "Country"
+                                    }
+                                },
+                                "required": [
+                                    "street",
+                                    "city",
+                                    "state",
+                                    "postalCode",
+                                    "country"
+                                ]
+                            }
+                        },
+                        "required": [
+                            "controlNumber",
+                            "salesOrder",
+                            "containers",
+                            "deliveryAddress"
+                        ]
+                    }
+                },
+                "runAfter": {
+                    "close_jsonItems": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_jsonItems": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "jsonItems",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_control_id": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "For_each": {
+                "type": "Foreach",
+                "foreach": "@skip(split(body('Get_file_content'), '\\r\\n'), 1)",
+                "actions": {
+                    "Condition": {
+                        "type": "If",
+                        "expression": {
+                            "and": [
+                                {
+                                    "contains": [
+                                        "@variables('rawItem')",
+                                        "@variables('rawItem')[1]"
+                                    ]
+                                }
+                            ]
+                        },
+                        "actions": {
+                            "Add_additional_items_to_jsonLoad": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "jsonLoad",
+                                    "value": "@variables('tempLoad')"
+                                },
+                                "runAfter": {
+                                    "Set_variable_5": [
+                                        "Succeeded"
+                                    ]
+                                }
+                            },
+                            "Set_variable_5": {
+                                "type": "SetVariable",
+                                "inputs": {
+                                    "name": "tempLoad",
+                                    "value": "@{variables('jsonLoad')}\n        {\n        \"itemCode\": \"@{variables('rawItem')[3]}\",\n        \"quantity\": @{variables('rawItem')[4]},\n        \"cartonWeight\": @{variables('rawItem')[5]}\n        }"
+                                }
+                            }
+                        },
+                        "else": {
+                            "actions": {
+                                "Set_jsonLoad_to_new_load": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "jsonLoad",
+                                        "value": "{\n      \"loadId\": \"@{variables('rawItem')[1]}\",\n      \"containerType\": \"@{replace(replace(replace(replace(variables('rawItem')[3], 'HC40','40HC'), 'HC20','20HC'), 'REF40','40RF'), 'REF20','20RF')\n\n\n}\",\n      \"items\": [\n        {\n        \"itemCode\": \"@{variables('rawItem')[3]}\",\n        \"quantity\": @{variables('rawItem')[4]},\n        \"cartonWeight\": @{variables('rawItem')[5]}\n        },"
+                                    },
+                                    "runAfter": {
+                                        "Add_jsonLoad_to_jsonItems": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "Add_jsonLoad_to_jsonItems": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "jsonItems",
+                                        "value": "@variables('tempLoad')"
+                                    },
+                                    "runAfter": {
+                                        "Set_tempLoad": [
+                                            "Succeeded"
+                                        ]
+                                    }
+                                },
+                                "Set_tempLoad": {
+                                    "type": "SetVariable",
+                                    "inputs": {
+                                        "name": "tempLoad",
+                                        "value": "@{variables('jsonItems')}@{variables('jsonLoad')}\n]},"
+                                    }
+                                }
+                            }
+                        },
+                        "runAfter": {
+                            "Set_variable": [
+                                "Succeeded"
+                            ]
+                        }
+                    },
+                    "Set_variable": {
+                        "type": "SetVariable",
+                        "inputs": {
+                            "name": "rawItem",
+                            "value": "@split(items('For_each'), ',')"
+                        }
+                    }
+                },
+                "runAfter": {
+                    "Initialize_rawItem": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_jsonLoad": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "jsonLoad",
+                            "type": "string"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_jsonItems": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_rawItem": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "rawItem",
+                            "type": "string",
+                            "value": " "
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_tempLoad": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "close_jsonItems": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "closedJsonItems",
+                            "type": "string",
+                            "value": "@{variables('jsonItems')}@{variables('jsonLoad')}\n]}\n"
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "For_each": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "Initialize_tempLoad": {
+                "type": "InitializeVariable",
+                "inputs": {
+                    "variables": [
+                        {
+                            "name": "tempLoad",
+                            "type": "string",
+                            "value": " "
+                        }
+                    ]
+                },
+                "runAfter": {
+                    "Initialize_jsonLoad": [
+                        "Succeeded"
+                    ]
+                }
+            },
+            "HTTP": {
+                "type": "Http",
+                "inputs": {
+                    "uri": "https://www.google.com/",
+                    "method": "POST",
+                    "headers": {
+                        "x-api-key": "@{body('3PLAuthKey')?['value']}"
+                    },
+                    "body": "@body('Create_JSON')"
+                },
+                "runAfter": {
+                    "3PLAuthKey": [
+                        "Succeeded"
+                    ]
+                },
+                "runtimeConfiguration": {
+                    "contentTransfer": {
+                        "transferMode": "Chunked"
+                    }
+                }
+            },
+            "3PLAuthKey": {
+                "type": "ApiConnection",
+                "inputs": {
+                    "host": {
+                        "connection": {
+                            "name": "@parameters('$connections')['keyvault']['connectionId']"
+                        }
+                    },
+                    "method": "get",
+                    "path": "/secrets/@{encodeURIComponent('3PLAuthKey')}/value"
+                },
+                "runAfter": {
+                    "Create_JSON": [
+                        "Succeeded"
+                    ]
+                }
+            }
+        },
+        "outputs": {},
+        "parameters": {
+            "$connections": {
+                "type": "Object",
+                "defaultValue": {}
+            }
+        }
+    },
+    "parameters": {
+        "$connections": {
+            "value": {
+                "keyvault": {
+                    "id": "/subscriptions/d41f6b9f-1dd8-456e-84b4-ca83cc38a5fa/providers/Microsoft.Web/locations/australiasoutheast/managedApis/keyvault",
+                    "connectionId": "/subscriptions/d41f6b9f-1dd8-456e-84b4-ca83cc38a5fa/resourceGroups/Sanford/providers/Microsoft.Web/connections/keyvault",
+                    "connectionName": "keyvault",
+                    "connectionProperties": {
+                        "authentication": {
+                            "type": "ManagedServiceIdentity"
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
